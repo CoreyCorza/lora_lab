@@ -34,9 +34,38 @@ This app lets you **see it** and **fix it**.
 ## Requirements
 
 - **Windows** (built/tested); should build on other platforms via Tauri
-- **A Python with numpy** — that's the only Python dependency. Set the path to
-  your interpreter in the gear menu (defaults try a configured path, then
-  `python` on PATH).
+- **A Python with numpy** — that's the only Python dependency. The app tries
+  the interpreter set in the gear menu (⚙), then `python` on your PATH.
+
+### Python setup (pick whichever fits you)
+
+**Already run ComfyUI portable?** You have everything — just point the gear
+menu (⚙) at ComfyUI's bundled interpreter, e.g.:
+
+```
+C:\path\to\ComfyUI\python_embeded\python.exe
+```
+
+**Have Python installed?** Make a small venv for LoRA Lab (keeps your system
+Python clean) and install numpy — one-time, ~30 seconds:
+
+```powershell
+python -m venv C:\lora-lab-venv
+C:\lora-lab-venv\Scripts\python -m pip install numpy
+```
+
+Then open the gear menu (⚙) in LoRA Lab and set the python path to:
+
+```
+C:\lora-lab-venv\Scripts\python.exe
+```
+
+**No Python at all?** Install it from https://www.python.org/downloads/
+(tick "Add python.exe to PATH" in the installer), then run
+`python -m pip install numpy`. LoRA Lab will find it on PATH automatically.
+
+If the app shows a "failed to launch python" error, it's always one of the
+above — the gear-menu path is the fix.
 
 ## Install
 
