@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LoRA Lab</title>
+  <style>html,body{background:#141414}</style>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body style="opacity: 0;">
+
+  <div id="app">
+    <div id="toolbar">
+      <div class="brand">LoRA<span>Lab</span></div>
+      <input id="folder-input" type="text" autocomplete="off" spellcheck="false" placeholder="Paste a LoRA folder path or Browse...">
+      <button id="btn-browse" class="btn">Browse</button>
+      <button id="btn-scan" class="btn accent">Scan</button>
+      <div class="spacer"></div>
+      <button id="btn-settings" class="btn icon" data-tip="Settings">&#9881;</button>
+    </div>
+
+    <div id="settings-row" class="hidden">
+      <label>python.exe</label>
+      <input id="python-input" type="text" autocomplete="off" spellcheck="false">
+      <label>default cap</label>
+      <input id="default-cap" type="text" autocomplete="off" style="width:52px">
+      <span class="settings-hint">venv needs numpy only</span>
+    </div>
+
+    <div id="main">
+      <div id="filepanel">
+        <div class="panel-head">
+          <input id="filter-input" type="text" autocomplete="off" spellcheck="false" placeholder="Filter...">
+          <button id="btn-analyze-all" class="btn small" data-tip="Analyze every unanalyzed file in the list">Analyze all</button>
+        </div>
+        <div id="filelist"></div>
+        <div id="list-status"></div>
+      </div>
+
+      <div id="dashboard">
+        <div id="empty-state">
+          <div class="empty-art">
+            <div class="ebar" style="height:10px"></div><div class="ebar" style="height:14px"></div>
+            <div class="ebar" style="height:8px"></div><div class="ebar spike" style="height:64px"></div>
+            <div class="ebar" style="height:12px"></div><div class="ebar" style="height:9px"></div>
+            <div class="ebar" style="height:13px"></div>
+          </div>
+          <p>Scan a folder, then select a checkpoint to inspect its spectral health.</p>
+          <p class="dim">healthy &sigma;_max &le; ~5 &middot; spiked = rank&#8209;1 direction at &sigma; 14&ndash;28 &rarr; breaks stacking</p>
+        </div>
+
+        <div id="report" class="hidden">
+          <div id="report-head">
+            <div id="report-name"></div>
+            <div id="report-chips"></div>
+          </div>
+
+          <div id="stats-row"></div>
+
+          <div class="section-label">&sigma;_max per module &mdash; sorted <span id="chart-sub" class="dim"></span></div>
+          <div id="chart-wrap">
+            <canvas id="chart"></canvas>
+            <div id="chart-tip" class="hidden"></div>
+          </div>
+
+          <div class="cols">
+            <div>
+              <div class="section-label">Top offenders</div>
+              <table id="offenders"><thead><tr><th>module</th><th class="num">&sigma;_max</th><th class="num">stable rank</th></tr></thead><tbody></tbody></table>
+            </div>
+            <div>
+              <div class="section-label">Clip</div>
+              <div id="clip-box">
+                <div class="clip-row">
+                  <span class="clip-lbl">cap</span>
+                  <input id="cap-input" type="text" autocomplete="off">
+                  <button class="btn small preset" data-cap="4">4</button>
+                  <button class="btn small preset" data-cap="5">5</button>
+                  <button class="btn small preset" data-cap="8">8</button>
+                  <div class="spacer"></div>
+                  <button id="btn-clip" class="btn accent">Clip &rarr; new file</button>
+                </div>
+                <div id="clip-status"></div>
+                <div id="clip-result" class="hidden"></div>
+              </div>
+              <div class="section-label" style="margin-top:14px">Notes</div>
+              <div id="verdict-note"></div>
+            </div>
+          </div>
+        </div>
+
+        <div id="busy" class="hidden"><div class="busy-bar"></div><span id="busy-text"></span></div>
+      </div>
+    </div>
+
+    <div id="toast" class="hidden"></div>
+    <div id="tooltip" class="hidden"></div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
