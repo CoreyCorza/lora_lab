@@ -202,10 +202,22 @@ input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:foc
 
 /* ---------- autodownload (vast) tab ---------- */
 #vastpanel { flex: 1; min-width: 0; overflow-y: auto; padding: 12px 14px; display: flex; }
-.vast-grid { display: grid; grid-template-columns: minmax(340px, 460px) 1fr; gap: 16px; flex: 1; align-items: stretch; min-height: 0; }
-@media (max-width: 860px) { .vast-grid { grid-template-columns: 1fr; } }
-.vast-logcol { display: flex; flex-direction: column; min-height: 0; }
+.vast-grid { display: flex; gap: 10px; flex: 1; align-items: stretch; min-height: 0; }
+.vast-grid > div:first-child { width: var(--vast-w, 430px); min-width: 320px; max-width: 60vw; flex-shrink: 0; }
+.vast-logcol { display: flex; flex-direction: column; min-height: 0; flex: 1; min-width: 200px; }
 .vast-logcol #v-log { flex: 1; height: auto; min-height: 200px; }
+
+#v-resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  background-clip: padding-box;
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
+  border-radius: 2px;
+}
+#v-resizer:hover, #v-resizer.dragging { background-color: var(--accent); }
 .vcard {
   background: var(--bg-surface);
   border: 1px solid var(--border);
@@ -308,7 +320,7 @@ input[type="text"]:focus, input[type="password"]:focus, input[type="number"]:foc
 }
 #resizer:hover, #resizer.dragging { background-color: var(--accent); }
 body.resizing { cursor: col-resize; }
-body.resizing #dashboard, body.resizing #filepanel { pointer-events: none; }
+body.resizing #dashboard, body.resizing #filepanel, body.resizing #vastpanel .vast-grid > div { pointer-events: none; }
 .panel-head {
   display: flex; gap: 6px; align-items: center;
   padding: 6px;

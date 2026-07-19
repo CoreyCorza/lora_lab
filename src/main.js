@@ -995,7 +995,42 @@ async function vRefreshCredit() {
   }
 }
 
+function bindVastResizer() {
+  const saved = parseInt(localStorage.getItem('ll_vast_w'), 10);
+  if (saved) document.documentElement.style.setProperty('--vast-w', saved + 'px');
+
+  const resizer = $('v-resizer');
+  const grid = document.querySelector('.vast-grid');
+  const clampW = (x) => Math.min(Math.max(x, 320), window.innerWidth * 0.6);
+
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing');
+    const left = grid.getBoundingClientRect().left;
+
+    const onMove = (ev) => {
+      document.documentElement.style.setProperty('--vast-w', clampW(ev.clientX - left) + 'px');
+    };
+    const onUp = (ev) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      resizer.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      localStorage.setItem('ll_vast_w', String(Math.round(clampW(ev.clientX - left))));
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  resizer.addEventListener('dblclick', () => {
+    document.documentElement.style.setProperty('--vast-w', '430px');
+    localStorage.setItem('ll_vast_w', '430');
+  });
+}
+
 async function initVast() {
+  bindVastResizer();
   try { vWriteForm(await invoke('sync_get_config')); }
   catch (e) { vAppendLog({ ts: vNow(), level: 'error', msg: `Failed to load settings: ${e}` }); }
 
