@@ -120,6 +120,19 @@ def cmd_scan(directory):
     return {"dir": directory, "files": results}
 
 
+def _sigma_max(W, iters=30, block=4, seed=0):
+    """Top singular value via block power iteration — O(n^2) per step instead of
+    the O(n^3) full SVD. Accurate to well under 1% for health-check purposes."""
+    W = np.ascontiguousarray(W, dtype=np.float32)
+    rng = np.random.default_rng(seed)
+    V = rng.standard_normal((W.shape[1], block)).astype(np.float32)
+    V, _ = np.linalg.qr(V)
+    for _ in range(iters):
+        V, _ = np.linalg.qr(W.T @ (W @ V))
+    s = np.linalg.svd(W @ V, compute_uv=False)
+    return float(s[0])
+
+
 def cmd_analyze(path):
     header, base = read_header(path)
     lora, lokr = collect_modules(header)
@@ -136,12 +149,15 @@ def cmd_analyze(path):
                             "norm": round(fro2 ** 0.5, 4), "rank": int(rank)})
     elif ftype == "lokr":
         for mod, parts in sorted(lokr.items()):
-            w1 = load(path, header[parts["w1"]], base)
-            w2 = load(path, header[parts["w2"]], base)
-            s1 = np.linalg.svd(as2d(w1), compute_uv=False)
-            s2 = np.linalg.svd(as2d(w2), compute_uv=False)
-            smax = float(s1[0] * s2[0])
-            fro2 = float((s1 ** 2).sum() * (s2 ** 2).sum())
+            w1 = as2d(load(path, header[parts["w1"]], base))
+            w2 = as2d(load(path, header[parts["w2"]], base))
+            # kron identities: sigma_max factorizes, frobenius norm factorizes.
+            # w1 is tiny (exact SVD); w2 only needs its top sigma (power iteration)
+            # -- avoids a full O(n^3) SVD per module, which made big LoKrs crawl.
+            s1max = float(np.linalg.svd(w1, compute_uv=False)[0])
+            s2max = _sigma_max(w2)
+            smax = s1max * s2max
+            fro2 = float((w1.astype(np.float64) ** 2).sum() * (w2.astype(np.float64) ** 2).sum())
             srank = fro2 / (smax ** 2) if smax > 0 else 0.0
             modules.append({"mod": mod, "smax": round(smax, 4), "srank": round(srank, 2),
                             "norm": round(fro2 ** 0.5, 4), "rank": None})
