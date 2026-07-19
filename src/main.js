@@ -96,6 +96,8 @@ async function scan() {
     const data = await tool(['scan', dir], 'scanning folder...');
     state.files = data.files;
     renderList();
+    computeRuns();
+    renderRuns();
     $('list-status').textContent = `${state.files.length} files`;
     if (!state.files.length) toast('No .safetensors found in that folder', true);
   } catch (e) {
@@ -402,6 +404,271 @@ function bindTooltips() {
   });
 }
 
+/* ---------------- training tab ---------------- */
+
+const train = { runs: [], selected: null, traj: null, trajKey: null };
+
+function computeRuns() {
+  const groups = new Map();
+  for (const f of state.files) {
+    if (f.is_clip) continue;
+    const m = f.name.match(/^(.*?)_?(\d{4,9})\.safetensors$/);
+    if (!m) continue;
+    const key = f.dir + '|' + m[1];
+    if (!groups.has(key)) groups.set(key, { key, name: m[1], dir: f.dir, ckpts: [] });
+    groups.get(key).ckpts.push({ step: parseInt(m[2], 10), file: f });
+  }
+  train.runs = [...groups.values()]
+    .filter((r) => r.ckpts.length >= 2)
+    .map((r) => { r.ckpts.sort((a, b) => a.step - b.step); return r; })
+    .sort((a, b) => b.ckpts[b.ckpts.length - 1].file.mtime - a.ckpts[a.ckpts.length - 1].file.mtime);
+}
+
+function renderRuns() {
+  const q = state.filter.toLowerCase();
+  const runs = train.runs.filter((r) => !q || (r.dir + '/' + r.name).toLowerCase().includes(q));
+  $('runlist').innerHTML = runs.map((r) => {
+    const sel = train.selected === r.key ? ' selected' : '';
+    const steps = r.ckpts;
+    return `<div class="run-item${sel}" data-run="${escapeHtml(r.key)}">
+      <div class="rname">${escapeHtml(r.name)}</div>
+      <div class="rsub">${escapeHtml(r.dir === '.' ? '/' : r.dir)} &middot; ${steps.length} ckpts &middot; ${steps[0].step}&ndash;${steps[steps.length - 1].step}</div>
+    </div>`;
+  }).join('') || '<div class="dir-head">no runs found (need 2+ numbered checkpoints)</div>';
+}
+
+function selectRun(key) {
+  train.selected = key;
+  renderRuns();
+  const r = train.runs.find((x) => x.key === key);
+  if (!r) return;
+  $('train-empty').classList.add('hidden');
+  $('train-report').classList.remove('hidden');
+  $('train-name').textContent = r.name;
+  $('btn-analyze-run').textContent = `Analyze run (${r.ckpts.length} checkpoints)`;
+  if (train.trajKey === key && train.traj) {
+    renderTraining(r);
+  } else {
+    $('train-charts').classList.add('hidden');
+    $('train-status').textContent = 'not analyzed yet — first pass reads every checkpoint (fast when already analyzed in Inspect)';
+  }
+}
+
+async function analyzeRun() {
+  const r = train.runs.find((x) => x.key === train.selected);
+  if (!r) return;
+  const btn = $('btn-analyze-run');
+  btn.disabled = true;
+  try {
+    // warm the per-file analysis cache in parallel first, then one traj call
+    // (traj hits the disk cache for analyses and only loads factors for cosines)
+    const pending = r.ckpts.map((c) => c.file).filter((f) => !getCached(f));
+    let done = 0;
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length) {
+        const f = pending[next++];
+        try {
+          const a = await tool(['analyze', f.path]);
+          state.fullCache.set(f.path, a);
+          setCached(f, a);
+        } catch { /* surfaced by traj below if fatal */ }
+        $('train-status').textContent = `analyzing checkpoints ${++done}/${pending.length} (3 at a time)...`;
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, pending.length) }, worker));
+
+    $('train-status').textContent = 'computing direction trajectory (loads pairs of checkpoints, cached after first run)...';
+    const traj = await tool(['traj', ...r.ckpts.map((c) => c.file.path)]);
+    train.traj = traj;
+    train.trajKey = r.key;
+    renderList();
+    renderTraining(r);
+  } catch (e) {
+    $('train-status').textContent = '';
+    toast(String(e.message || e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function settlingZone(steps, traj) {
+  const norms = traj.files.map((f) => f.total_norm);
+  const sranks = traj.files.map((f) => f.median_srank);
+  const slopes = norms.map((v, i) => i === 0 ? 0 : (v - norms[i - 1]) / Math.max(steps[i] - steps[i - 1], 1));
+  const maxSlope = Math.max(...slopes.slice(1), 1e-9);
+  const maxSrank = Math.max(...sranks);
+  let start = -1;
+  for (let i = 1; i < steps.length; i++) {
+    const cos = traj.cosines[i];
+    if (cos != null && cos >= 0.995 && slopes[i] <= 0.3 * maxSlope) { start = i; break; }
+  }
+  if (start < 0) return null;
+  let end = steps.length - 1;
+  for (let i = start; i < steps.length; i++) {
+    if (sranks[i] < 0.85 * maxSrank || traj.files[i].peak_smax > 8) { end = Math.max(start, i - 1); break; }
+  }
+  return { start, end };
+}
+
+function drawSeries(canvas, steps, values, opts = {}) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const color = opts.color || css.getPropertyValue('--accent').trim();
+  const padL = 42, padR = 8, padT = 8, padB = 16;
+  const pw = w - padL - padR, ph = h - padT - padB;
+  const vals = values.filter((v) => v != null);
+  if (!vals.length) return;
+  let lo = opts.yMin != null ? opts.yMin : Math.min(...vals);
+  let hi = Math.max(...vals, opts.capY != null ? opts.capY * 1.15 : -Infinity);
+  if (hi - lo < 1e-9) { hi = lo + 1; }
+  const pad = (hi - lo) * 0.08; lo -= opts.yMin != null ? 0 : pad; hi += pad;
+  const X = (i) => padL + (steps.length === 1 ? 0 : (steps[i] - steps[0]) / (steps[steps.length - 1] - steps[0]) * pw);
+  const Y = (v) => padT + ph - (v - lo) / (hi - lo) * ph;
+
+  // settling zone shading
+  if (opts.zone) {
+    ctx.fillStyle = 'rgba(107,138,255,0.08)';
+    ctx.fillRect(X(opts.zone.start), padT, X(opts.zone.end) - X(opts.zone.start) || 2, ph);
+  }
+  ctx.font = '9px Consolas, monospace';
+  ctx.fillStyle = 'rgba(200,200,200,0.4)';
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  for (const t of [lo, (lo + hi) / 2, hi]) {
+    const y = Y(t);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.fillText(t >= 100 ? t.toFixed(0) : t.toFixed(2), 2, y + 3);
+  }
+  ctx.fillText(String(steps[0]), padL, h - 4);
+  const lastLbl = String(steps[steps.length - 1]);
+  ctx.fillText(lastLbl, w - padR - ctx.measureText(lastLbl).width, h - 4);
+
+  if (opts.capY != null) {
+    const y = Y(opts.capY);
+    ctx.strokeStyle = css.getPropertyValue('--accent').trim();
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  let started = false;
+  values.forEach((v, i) => {
+    if (v == null) return;
+    if (!started) { ctx.moveTo(X(i), Y(v)); started = true; }
+    else ctx.lineTo(X(i), Y(v));
+  });
+  ctx.stroke();
+  ctx.fillStyle = color;
+  canvas._pts = [];
+  values.forEach((v, i) => {
+    if (v == null) return;
+    ctx.beginPath(); ctx.arc(X(i), Y(v), 2.4, 0, Math.PI * 2); ctx.fill();
+    canvas._pts.push({ x: X(i), i, v });
+  });
+}
+
+function spectroColor(s) {
+  // 0 -> surface, 5 (cap) -> teal->amber boundary, >=15 -> hot orange
+  const t = Math.min(s / 5, 1), u = Math.min(Math.max((s - 5) / 10, 0), 1);
+  if (u <= 0) return `rgb(${Math.round(30 + 33 * t)},${Math.round(33 + 146 * t)},${Math.round(43 + 119 * t)})`;
+  return `rgb(${Math.round(63 + (224 - 63) * u)},${Math.round(179 - (179 - 113) * u)},${Math.round(162 - (162 - 79) * u)})`;
+}
+
+function moduleSortKey(mod) {
+  const b = mod.match(/blocks\.(\d+)\./);
+  return (b ? parseInt(b[1], 10) : 999) * 100 + (mod.includes('mlp.gate') ? 0 : mod.includes('mlp') ? 1 : 2);
+}
+
+function renderTraining(r) {
+  const traj = train.traj;
+  const steps = r.ckpts.map((c) => c.step);
+  $('train-charts').classList.remove('hidden');
+  $('train-status').textContent = `${steps.length} checkpoints · steps ${steps[0]}–${steps[steps.length - 1]} · ${traj.files[0].type}`;
+
+  const zone = settlingZone(steps, traj);
+  const note = $('train-zone-note');
+  if (zone) {
+    note.innerHTML = `<b>Suggested zone (heuristic): steps ${steps[zone.start]}–${steps[zone.end]}</b> — direction locked (cos ≥ 0.995) and absorption flattened, before rank collapse / spike takeover. Verify visually in this range; weight-space can't see likeness.`;
+  } else {
+    note.innerHTML = `<b>No settling detected</b> — direction was still moving or norm still climbing at the last checkpoint. Likely undercooked (or step interval too coarse to tell).`;
+  }
+
+  drawSeries($('c-norm'), steps, traj.files.map((f) => f.total_norm), { zone });
+  drawSeries($('c-peak'), steps, traj.files.map((f) => f.peak_smax), { zone, capY: 5, yMin: 0, color: getComputedStyle(document.documentElement).getPropertyValue('--bad').trim() });
+  drawSeries($('c-srank'), steps, traj.files.map((f) => f.median_srank), { zone, yMin: 0 });
+  drawSeries($('c-cos'), steps, traj.cosines, { zone, color: getComputedStyle(document.documentElement).getPropertyValue('--good').trim() });
+
+  // spectrogram
+  const canvas = $('c-spectro');
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const order = traj.mod_order.map((m, idx) => ({ m, idx })).sort((a, b) => moduleSortKey(a.m) - moduleSortKey(b.m));
+  const cols = traj.spectro.length, rows = order.length;
+  const cw = w / cols, rh = h / rows;
+  for (let c = 0; c < cols; c++) {
+    for (let ri = 0; ri < rows; ri++) {
+      ctx.fillStyle = spectroColor(traj.spectro[c][order[ri].idx]);
+      ctx.fillRect(c * cw, ri * rh, Math.ceil(cw) - (cw > 3 ? 1 : 0), Math.ceil(rh));
+    }
+  }
+  canvas._meta = { steps, order, cw, rh, traj, run: r };
+  $('spectro-legend').innerHTML = `rows: modules grouped by block (gates first) &middot; color: <span style="color:${spectroColor(1)}">σ low</span> → <span style="color:${spectroColor(5)}">σ 5</span> → <span style="color:${spectroColor(15)}">σ 15+</span>`;
+}
+
+function spectroHover(ev) {
+  const canvas = $('c-spectro');
+  const meta = canvas._meta;
+  const tip = $('tooltip');
+  if (!meta) return;
+  const rect = canvas.getBoundingClientRect();
+  const c = Math.min(Math.floor((ev.clientX - rect.left) / meta.cw), meta.steps.length - 1);
+  const ri = Math.min(Math.floor((ev.clientY - rect.top) / meta.rh), meta.order.length - 1);
+  if (c < 0 || ri < 0) { tip.classList.add('hidden'); return; }
+  const mod = meta.order[ri].m;
+  const s = meta.traj.spectro[c][meta.order[ri].idx];
+  tip.textContent = `step ${meta.steps[c]} · ${mod.replace('diffusion_model.', '')} · σ ${s.toFixed(2)}`;
+  tip.classList.remove('hidden');
+  tip.style.left = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = (ev.clientY + 14) + 'px';
+}
+
+function lineHover(ev) {
+  const canvas = ev.currentTarget;
+  const tip = $('tooltip');
+  if (!canvas._pts || !canvas._pts.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  let best = canvas._pts[0];
+  for (const p of canvas._pts) if (Math.abs(p.x - x) < Math.abs(best.x - x)) best = p;
+  const meta = $('c-spectro')._meta;
+  const step = meta ? meta.steps[best.i] : best.i;
+  tip.textContent = `step ${step} · ${best.v.toFixed(3)}`;
+  tip.classList.remove('hidden');
+  tip.style.left = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+  tip.style.top = (ev.clientY + 14) + 'px';
+}
+
+function setTab(tab) {
+  document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
+  const training = tab === 'training';
+  $('filelist').classList.toggle('hidden', training);
+  $('runlist').classList.toggle('hidden', !training);
+  $('dashboard').classList.toggle('hidden', training);
+  $('training').classList.toggle('hidden', !training);
+  $('btn-analyze-all').classList.toggle('hidden', training);
+  if (training) { computeRuns(); renderRuns(); }
+}
+
 /* ---------------- sidebar resize ---------------- */
 
 function bindResizer() {
@@ -476,7 +743,29 @@ function init() {
     $('cap-input').value = settings.cap;
   });
 
-  $('filter-input').addEventListener('input', () => { state.filter = $('filter-input').value; renderList(); });
+  $('filter-input').addEventListener('input', () => { state.filter = $('filter-input').value; renderList(); renderRuns(); });
+
+  document.querySelectorAll('.tab').forEach((t) =>
+    t.addEventListener('click', () => setTab(t.dataset.tab)));
+  $('runlist').addEventListener('click', (e) => {
+    const item = e.target.closest('.run-item');
+    if (item) selectRun(item.getAttribute('data-run'));
+  });
+  $('btn-analyze-run').addEventListener('click', analyzeRun);
+  $('c-spectro').addEventListener('mousemove', spectroHover);
+  $('c-spectro').addEventListener('mouseleave', () => $('tooltip').classList.add('hidden'));
+  $('c-spectro').addEventListener('click', (ev) => {
+    const meta = $('c-spectro')._meta;
+    if (!meta) return;
+    const rect = $('c-spectro').getBoundingClientRect();
+    const c = Math.min(Math.floor((ev.clientX - rect.left) / meta.cw), meta.steps.length - 1);
+    setTab('inspect');
+    selectFile(meta.run.ckpts[c].file.path);
+  });
+  document.querySelectorAll('.tchart').forEach((cv) => {
+    cv.addEventListener('mousemove', lineHover);
+    cv.addEventListener('mouseleave', () => $('tooltip').classList.add('hidden'));
+  });
   $('btn-analyze-all').addEventListener('click', analyzeAll);
 
   $('filelist').addEventListener('click', (e) => {
@@ -491,7 +780,11 @@ function init() {
 
   $('chart').addEventListener('mousemove', chartHover);
   $('chart').addEventListener('mouseleave', () => $('chart-tip').classList.add('hidden'));
-  window.addEventListener('resize', () => { if (state.analysis) drawChart(); });
+  window.addEventListener('resize', () => {
+    if (state.analysis) drawChart();
+    const r = train.runs.find((x) => x.key === train.selected);
+    if (r && train.trajKey === r.key && train.traj && !$('training').classList.contains('hidden')) renderTraining(r);
+  });
 
   bindTooltips();
   bindResizer();

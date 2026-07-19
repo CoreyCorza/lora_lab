@@ -27,6 +27,11 @@
       <span class="settings-hint">venv needs numpy only</span>
     </div>
 
+    <div id="tabbar">
+      <button class="tab active" data-tab="inspect">Inspect</button>
+      <button class="tab" data-tab="training">Training</button>
+    </div>
+
     <div id="main">
       <div id="filepanel">
         <div class="panel-head">
@@ -34,6 +39,7 @@
           <button id="btn-analyze-all" class="btn small" data-tip="Analyze every unanalyzed file in the list">Analyze all</button>
         </div>
         <div id="filelist"></div>
+        <div id="runlist" class="hidden"></div>
         <div id="list-status"></div>
       </div>
 
@@ -92,6 +98,34 @@
         </div>
 
         <div id="busy" class="hidden"><div class="busy-bar"></div><span id="busy-text"></span></div>
+      </div>
+
+      <div id="training" class="hidden">
+        <div id="train-empty">
+          <p>Select a training run on the left &mdash; any series of checkpoints saved by the trainer.</p>
+          <p class="dim">Charts show how the adapter evolved: what it absorbed, when its direction settled, and when the spike formed.</p>
+        </div>
+
+        <div id="train-report" class="hidden">
+          <div id="train-head">
+            <div id="train-name"></div>
+            <button id="btn-analyze-run" class="btn accent">Analyze run</button>
+          </div>
+          <div id="train-status" class="dim"></div>
+
+          <div id="train-charts" class="hidden">
+            <div id="train-zone-note"></div>
+            <div class="chart-card"><div class="section-label">total &Delta; norm &mdash; how much the adapter has absorbed</div><canvas class="tchart" id="c-norm"></canvas></div>
+            <div class="chart-card"><div class="section-label">peak &sigma;_max &mdash; spike growth (dashed = healthy ceiling)</div><canvas class="tchart" id="c-peak"></canvas></div>
+            <div class="chart-card"><div class="section-label">median stable rank &mdash; direction diversity (falling = memorizing)</div><canvas class="tchart" id="c-srank"></canvas></div>
+            <div class="chart-card"><div class="section-label">direction stability &mdash; cos(checkpoint, previous)</div><canvas class="tchart" id="c-cos"></canvas></div>
+            <div class="chart-card">
+              <div class="section-label">spectrogram &mdash; &sigma;_max per module across training <span class="dim">(click a column to open that checkpoint)</span></div>
+              <canvas id="c-spectro"></canvas>
+              <div id="spectro-legend" class="dim"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

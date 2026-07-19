@@ -4,6 +4,10 @@ All subcommands print a single JSON object to stdout.
   scan <dir>            list safetensors files in dir (recursive, depth 3)
   analyze <file>        per-module spectral analysis + verdict
   clip <file> <cap>     write *_sclip<cap> copy with singular values capped
+  traj <f1> <f2> ...    training-run trajectory: per-checkpoint stats + spectrogram
+                        matrix + direction cosine between consecutive checkpoints.
+                        Analyses and pair-cosines are disk-cached, so re-running on
+                        a growing run only loads the new checkpoints.
   pick                  native folder picker (tkinter), returns {"dir": ...}
 """
 import hashlib
@@ -224,6 +228,124 @@ def cmd_analyze(path):
     return result
 
 
+def _pair_cache_path(p1, st1, p2, st2):
+    key = hashlib.sha1(
+        f"{os.path.abspath(p1)}|{int(st1.st_mtime)}|{st1.st_size}||"
+        f"{os.path.abspath(p2)}|{int(st2.st_mtime)}|{st2.st_size}".encode()
+    ).hexdigest()
+    return os.path.join(_cache_dir(), "pair_" + key + ".json")
+
+
+def _load_factors(path):
+    """Load every adapter factor into memory (for cross-checkpoint comparison)."""
+    header, base = read_header(path)
+    lora, lokr = collect_modules(header)
+    if lokr:
+        out = {}
+        for mod, parts in sorted(lokr.items()):
+            out[mod] = (as2d(load(path, header[parts["w1"]], base)),
+                        as2d(load(path, header[parts["w2"]], base)))
+        return "lokr", out
+    if lora:
+        out = {}
+        for mod, parts in sorted(lora.items()):
+            A = as2d(load(path, header[parts["A"]], base))
+            B = as2d(load(path, header[parts["B"]], base))
+            scale = 1.0
+            if "alpha" in parts:
+                alpha = float(load(path, header[parts["alpha"]], base).reshape(-1)[0])
+                if alpha < 1e6:
+                    scale = alpha / A.shape[0]
+            out[mod] = (A, B, scale)
+        return "lora", out
+    return "other", {}
+
+
+def _pair_cos(t1, t2):
+    """Global cosine between two checkpoints' full weight deltas.
+    Never materializes the deltas: LoRA uses trace identities on the small
+    factor products; LoKr uses <w1 kron w2, w1' kron w2'> = <w1,w1'><w2,w2'>."""
+    ft1, f1 = t1
+    ft2, f2 = t2
+    if ft1 != ft2 or ft1 == "other":
+        return None
+    inner = n1 = n2 = 0.0
+    for mod, x in f1.items():
+        y = f2.get(mod)
+        if y is None:
+            continue
+        if ft1 == "lokr":
+            w1a, w2a = x
+            w1b, w2b = y
+            if w1a.shape != w1b.shape or w2a.shape != w2b.shape:
+                continue
+            inner += float((w1a * w1b).sum()) * float((w2a * w2b).sum())
+            n1 += float((w1a ** 2).sum()) * float((w2a ** 2).sum())
+            n2 += float((w1b ** 2).sum()) * float((w2b ** 2).sum())
+        else:
+            A1, B1, s1 = x
+            A2, B2, s2 = y
+            if A1.shape[1] != A2.shape[1] or B1.shape[0] != B2.shape[0]:
+                continue
+            inner += s1 * s2 * float(np.trace((B1.T @ B2) @ (A2 @ A1.T)))
+            n1 += (s1 ** 2) * float(np.trace((B1.T @ B1) @ (A1 @ A1.T)))
+            n2 += (s2 ** 2) * float(np.trace((B2.T @ B2) @ (A2 @ A2.T)))
+    if n1 <= 0.0 or n2 <= 0.0:
+        return None
+    return inner / (n1 ** 0.5 * n2 ** 0.5)
+
+
+def cmd_traj(paths):
+    n = len(paths)
+    if n < 2:
+        return {"error": "need at least 2 checkpoints for a trajectory"}
+    stats = [os.stat(p) for p in paths]
+    pair_paths = [None] + [_pair_cache_path(paths[i - 1], stats[i - 1], paths[i], stats[i])
+                           for i in range(1, n)]
+    pair_cached = [True] + [os.path.exists(pp) for pp in pair_paths[1:]]
+    need_factors = [False] * n
+    for i in range(1, n):
+        if not pair_cached[i]:
+            need_factors[i - 1] = True
+            need_factors[i] = True
+
+    files, spectro = [], []
+    cosines = [None] * n
+    mod_order = None
+    prev_factors = None
+    for i, p in enumerate(paths):
+        a = cmd_analyze(p)
+        if "error" in a:
+            return {"error": f"{os.path.basename(p)}: {a['error']}"}
+        if mod_order is None:
+            mod_order = [m["mod"] for m in a["modules"]]
+        smap = {m["mod"]: m["smax"] for m in a["modules"]}
+        spectro.append([smap.get(m, 0.0) for m in mod_order])
+        files.append({k: a[k] for k in (
+            "path", "name", "mtime", "type", "verdict", "module_count", "peak_smax",
+            "mean_smax", "median_smax", "median_srank", "mean_srank", "total_norm", "over_cap_5")})
+
+        cur_factors = _load_factors(p) if need_factors[i] else None
+        if i > 0:
+            if pair_cached[i]:
+                try:
+                    with open(pair_paths[i], encoding="utf-8") as f:
+                        cosines[i] = json.load(f)["cos"]
+                except (OSError, json.JSONDecodeError, KeyError):
+                    cosines[i] = None
+            elif prev_factors is not None and cur_factors is not None:
+                c = _pair_cos(prev_factors, cur_factors)
+                cosines[i] = None if c is None else round(c, 5)
+                try:
+                    with open(pair_paths[i], "w", encoding="utf-8") as f:
+                        json.dump({"cos": cosines[i]}, f)
+                except OSError:
+                    pass
+        prev_factors = cur_factors
+
+    return {"files": files, "cosines": cosines, "mod_order": mod_order, "spectro": spectro}
+
+
 def to_bf16_bytes(arr):
     f = np.ascontiguousarray(arr, dtype=np.float32)
     u = f.view(np.uint32)
@@ -304,6 +426,8 @@ def main():
         out = cmd_analyze(sys.argv[2])
     elif cmd == "clip":
         out = cmd_clip(sys.argv[2], float(sys.argv[3]))
+    elif cmd == "traj":
+        out = cmd_traj(sys.argv[2:])
     elif cmd == "pick":
         out = cmd_pick()
     else:
