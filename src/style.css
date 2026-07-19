@@ -115,11 +115,25 @@ input[type="text"]:focus { border-color: var(--accent); }
 
 /* ---------- file panel ---------- */
 #filepanel {
-  width: 290px; min-width: 290px;
+  width: var(--sidebar-w, 290px);
+  min-width: 180px; max-width: 60vw;
+  flex-shrink: 0;
   display: flex; flex-direction: column;
-  border-right: 1px solid var(--border);
   background: var(--bg-surface);
 }
+
+#resizer {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border);
+  background-clip: padding-box;
+  border-left: 2px solid transparent;
+  border-right: 2px solid transparent;
+}
+#resizer:hover, #resizer.dragging { background-color: var(--accent); }
+body.resizing { cursor: col-resize; }
+body.resizing #dashboard, body.resizing #filepanel { pointer-events: none; }
 .panel-head {
   display: flex; gap: 6px; align-items: center;
   padding: 6px;

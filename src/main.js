@@ -384,6 +384,45 @@ function bindTooltips() {
   });
 }
 
+/* ---------------- sidebar resize ---------------- */
+
+function bindResizer() {
+  const saved = parseInt(localStorage.getItem('ll_sidebar_w'), 10);
+  if (saved) document.documentElement.style.setProperty('--sidebar-w', saved + 'px');
+
+  const resizer = $('resizer');
+  let raf = 0;
+
+  resizer.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    resizer.classList.add('dragging');
+    document.body.classList.add('resizing');
+
+    const onMove = (ev) => {
+      const w = Math.min(Math.max(ev.clientX, 180), window.innerWidth * 0.6);
+      document.documentElement.style.setProperty('--sidebar-w', w + 'px');
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (state.analysis) drawChart(); });
+    };
+    const onUp = (ev) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      resizer.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      const w = Math.min(Math.max(ev.clientX, 180), window.innerWidth * 0.6);
+      localStorage.setItem('ll_sidebar_w', String(Math.round(w)));
+      if (state.analysis) drawChart();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+
+  resizer.addEventListener('dblclick', () => {
+    document.documentElement.style.setProperty('--sidebar-w', '290px');
+    localStorage.setItem('ll_sidebar_w', '290');
+    if (state.analysis) drawChart();
+  });
+}
+
 /* ---------------- init ---------------- */
 
 function init() {
@@ -427,6 +466,7 @@ function init() {
   window.addEventListener('resize', () => { if (state.analysis) drawChart(); });
 
   bindTooltips();
+  bindResizer();
 
   if (settings.folder) scan();
 }
