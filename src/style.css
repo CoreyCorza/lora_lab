@@ -162,6 +162,24 @@ input[type="text"]:focus { border-color: var(--accent); }
   padding: 8px 10px;
   margin-bottom: 10px;
 }
+.chart-sub {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  margin: -2px 0 6px;
+  max-width: 90ch;
+}
+.chart-read {
+  font-size: 11px;
+  font-family: var(--mono);
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 2px;
+  background: var(--bg);
+}
+.chart-read.good { color: var(--good); }
+.chart-read.warn { color: var(--warn); }
+.chart-read.bad { color: var(--bad); }
 .tchart { display: block; width: 100%; height: 110px; }
 #c-spectro { display: block; width: 100%; height: 220px; cursor: pointer; }
 #spectro-legend { font-size: 10px; margin-top: 4px; font-family: var(--mono); }

@@ -492,23 +492,86 @@ async function analyzeRun() {
   }
 }
 
-function settlingZone(steps, traj) {
+function analyzeTrajectory(steps, traj) {
   const norms = traj.files.map((f) => f.total_norm);
   const sranks = traj.files.map((f) => f.median_srank);
+  const peaks = traj.files.map((f) => f.peak_smax);
+  const cosines = traj.cosines;
+  const n = steps.length;
+
+  // direction lock: first checkpoint whose update direction matches the previous
+  let lock = -1;
+  for (let i = 1; i < n; i++) {
+    if (cosines[i] != null && cosines[i] >= 0.995) { lock = i; break; }
+  }
+
   const slopes = norms.map((v, i) => i === 0 ? 0 : (v - norms[i - 1]) / Math.max(steps[i] - steps[i - 1], 1));
   const maxSlope = Math.max(...slopes.slice(1), 1e-9);
+  const lateFrom = Math.max(1, Math.floor(n * 0.75));
+  const lateSlope = slopes.slice(lateFrom).reduce((a, b) => a + b, 0) / Math.max(1, n - lateFrom);
+  const flattened = lateSlope <= 0.15 * maxSlope;
+
   const maxSrank = Math.max(...sranks);
-  let start = -1;
-  for (let i = 1; i < steps.length; i++) {
-    const cos = traj.cosines[i];
-    if (cos != null && cos >= 0.995 && slopes[i] <= 0.3 * maxSlope) { start = i; break; }
+  let rankFallAt = -1;
+  for (let i = 1; i < n; i++) if (sranks[i] < 0.85 * maxSrank) { rankFallAt = i; break; }
+  let spikeAt = -1;
+  for (let i = 0; i < n; i++) if (peaks[i] > 5) { spikeAt = i; break; }
+
+  let zone = null, endReason = null;
+  if (lock >= 0) {
+    const lockNorm = norms[lock];
+    let end = n - 1;
+    for (let i = lock; i < n; i++) {
+      if (norms[i] > lockNorm * 1.3) { end = Math.max(lock, i - 1); endReason = 'amp'; break; }
+      if (rankFallAt >= 0 && i >= rankFallAt) { end = Math.max(lock, i - 1); endReason = 'rank'; break; }
+      if (peaks[i] > 8) { end = Math.max(lock, i - 1); endReason = 'spike'; break; }
+    }
+    zone = { start: lock, end };
   }
-  if (start < 0) return null;
-  let end = steps.length - 1;
-  for (let i = start; i < steps.length; i++) {
-    if (sranks[i] < 0.85 * maxSrank || traj.files[i].peak_smax > 8) { end = Math.max(start, i - 1); break; }
+  const growthAfterLock = lock >= 0 ? norms[n - 1] / norms[lock] - 1 : null;
+  const lastStrength = lock >= 0 && norms[n - 1] > 0 ? norms[lock] / norms[n - 1] : null;
+  return { lock, zone, endReason, flattened, growthAfterLock, lastStrength,
+           norms, sranks, peaks, maxSrank, rankFallAt, spikeAt };
+}
+
+function setRead(id, cls, text) {
+  const el = $(id);
+  el.className = 'chart-read ' + cls;
+  el.textContent = text;
+}
+
+function fillReadings(steps, t) {
+  const last = steps.length - 1;
+  if (t.lock < 0) {
+    setRead('read-cos', 'warn', `this run: never locked — the concept was still changing at step ${steps[last]}. Undercooked; train longer (or checkpoints are too far apart to tell).`);
+  } else {
+    setRead('read-cos', 'good', `this run: direction locked at ~step ${steps[t.lock]}. Content stopped changing there — everything after only changes strength.`);
   }
-  return { start, end };
+
+  if (t.lock >= 0 && t.growthAfterLock > 0.25) {
+    setRead('read-norm', 'warn', `this run: +${Math.round(t.growthAfterLock * 100)}% louder since lock (step ${steps[t.lock]}) with no new content — amplification, the overcook mechanism. Expect drift/artifacts to creep in as this grows.`);
+  } else if (t.flattened) {
+    setRead('read-norm', 'good', 'this run: growth flattened — the adapter saturated cleanly.');
+  } else if (t.lock < 0) {
+    setRead('read-norm', 'good', 'this run: still climbing while direction is still moving — normal, still absorbing the dataset.');
+  } else {
+    setRead('read-norm', 'good', 'this run: modest growth since lock — within the healthy window.');
+  }
+
+  const maxPeak = Math.max(...t.peaks);
+  if (maxPeak <= 5.5) {
+    setRead('read-peak', 'good', `this run: stayed under the ceiling the whole way (max ${maxPeak.toFixed(1)}) — stacks clean, no clipping needed.`);
+  } else if (maxPeak <= 8) {
+    setRead('read-peak', 'warn', `this run: crossed σ5 at step ${steps[t.spikeAt]} (max ${maxPeak.toFixed(1)}) — clip checkpoints from there before stacking.`);
+  } else {
+    setRead('read-peak', 'bad', `this run: spike formed — σ ${maxPeak.toFixed(1)} by the end (crossed 5 at step ${steps[t.spikeAt]}). These checkpoints will break stacking unless clipped at 5.`);
+  }
+
+  if (t.rankFallAt < 0) {
+    setRead('read-srank', 'good', 'this run: held steady — energy stayed spread across directions, no memorization collapse.');
+  } else {
+    setRead('read-srank', 'bad', `this run: fell after step ${steps[t.rankFallAt]} — collapsing onto fewer directions (memorizing). Prefer checkpoints before that.`);
+  }
 }
 
 function drawSeries(canvas, steps, values, opts = {}) {
@@ -592,12 +655,22 @@ function renderTraining(r) {
   $('train-charts').classList.remove('hidden');
   $('train-status').textContent = `${steps.length} checkpoints · steps ${steps[0]}–${steps[steps.length - 1]} · ${traj.files[0].type}`;
 
-  const zone = settlingZone(steps, traj);
+  const t = analyzeTrajectory(steps, traj);
+  const zone = t.zone;
+  fillReadings(steps, t);
+
   const note = $('train-zone-note');
   if (zone) {
-    note.innerHTML = `<b>Suggested zone (heuristic): steps ${steps[zone.start]}–${steps[zone.end]}</b> — direction locked (cos ≥ 0.995) and absorption flattened, before rank collapse / spike takeover. Verify visually in this range; weight-space can't see likeness.`;
+    const endWhy = { amp: 'magnitude passes +30% beyond the lock point (louder, not smarter)',
+                     rank: 'stable rank starts collapsing (memorization)',
+                     spike: 'the spike passes σ8' }[t.endReason] || 'the run ends';
+    let html = `<b>Best-bet window (heuristic): steps ${steps[zone.start]}–${steps[zone.end]}</b> — starts where the direction locks, ends where ${endWhy}. Verify visually in this range; weight-space can't judge likeness.`;
+    if (t.lastStrength != null && t.lastStrength < 0.9) {
+      html += ` Late checkpoints aren't wasted: they're the same concept, amplified — e.g. run step ${steps[steps.length - 1]} at <b>strength ~${t.lastStrength.toFixed(2)}</b> to get its refinement at settled volume.`;
+    }
+    note.innerHTML = html;
   } else {
-    note.innerHTML = `<b>No settling detected</b> — direction was still moving or norm still climbing at the last checkpoint. Likely undercooked (or step interval too coarse to tell).`;
+    note.innerHTML = `<b>No lock yet</b> — the concept was still changing at the last checkpoint. Undercooked: train longer, then re-analyze (only new checkpoints get processed).`;
   }
 
   drawSeries($('c-norm'), steps, traj.files.map((f) => f.total_norm), { zone });

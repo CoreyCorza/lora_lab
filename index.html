@@ -115,12 +115,33 @@
 
           <div id="train-charts" class="hidden">
             <div id="train-zone-note"></div>
-            <div class="chart-card"><div class="section-label">total &Delta; norm &mdash; how much the adapter has absorbed</div><canvas class="tchart" id="c-norm"></canvas></div>
-            <div class="chart-card"><div class="section-label">peak &sigma;_max &mdash; spike growth (dashed = healthy ceiling)</div><canvas class="tchart" id="c-peak"></canvas></div>
-            <div class="chart-card"><div class="section-label">median stable rank &mdash; direction diversity (falling = memorizing)</div><canvas class="tchart" id="c-srank"></canvas></div>
-            <div class="chart-card"><div class="section-label">direction stability &mdash; cos(checkpoint, previous)</div><canvas class="tchart" id="c-cos"></canvas></div>
             <div class="chart-card">
-              <div class="section-label">spectrogram &mdash; &sigma;_max per module across training <span class="dim">(click a column to open that checkpoint)</span></div>
+              <div class="section-label">direction stability &mdash; is it still learning, or done?</div>
+              <div class="chart-sub">cos(checkpoint, previous). Climbing = still finding the concept. Pinned at ~1 = concept locked; every step after only changes volume, not content.</div>
+              <canvas class="tchart" id="c-cos"></canvas>
+              <div class="chart-read" id="read-cos"></div>
+            </div>
+            <div class="chart-card">
+              <div class="section-label">total &Delta; norm &mdash; how loud the adapter is</div>
+              <div class="chart-sub">Total weight change. Flattening = saturated (learning finished). Still climbing after the direction has locked = amplifying the same thing louder &mdash; the overcook mechanism.</div>
+              <canvas class="tchart" id="c-norm"></canvas>
+              <div class="chart-read" id="read-norm"></div>
+            </div>
+            <div class="chart-card">
+              <div class="section-label">peak &sigma;_max &mdash; spike watch</div>
+              <div class="chart-sub">Strongest single direction in any layer. Over the dashed ceiling (~5) = will conflict with other adapters when stacked; the higher it climbs, the worse.</div>
+              <canvas class="tchart" id="c-peak"></canvas>
+              <div class="chart-read" id="read-peak"></div>
+            </div>
+            <div class="chart-card">
+              <div class="section-label">median stable rank &mdash; memorization watch</div>
+              <div class="chart-sub">How many directions carry the update. Steady/high = learning general features. Falling = collapsing onto few directions = memorizing the dataset.</div>
+              <canvas class="tchart" id="c-srank"></canvas>
+              <div class="chart-read" id="read-srank"></div>
+            </div>
+            <div class="chart-card">
+              <div class="section-label">spectrogram &mdash; where the energy lives</div>
+              <div class="chart-sub">Each row a layer, each column a checkpoint. Teal = healthy strength; orange rows forming = a spike growing in that layer (krea2 LoRAs: watch the gate rows). Clicking a column opens that checkpoint in Inspect &mdash; navigation, not a judgement.</div>
               <canvas id="c-spectro"></canvas>
               <div id="spectro-legend" class="dim"></div>
             </div>
