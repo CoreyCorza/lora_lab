@@ -1,6 +1,6 @@
 [package]
 name = "lora-lab"
-version = "0.1.2"
+version = "0.2.0"
 description = "LoRA Lab"
 authors = ["you"]
 edition = "2021"
