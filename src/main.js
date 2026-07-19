@@ -505,6 +505,7 @@ async function analyzeRun() {
     renderList();
     renderTraining(r);
   } catch (e) {
+    console.error('analyzeRun failed:', e);
     $('train-status').textContent = '';
     toast(String(e.message || e), true);
   } finally {
@@ -710,11 +711,25 @@ function moduleSortKey(mod) {
 
 function renderTraining(r) {
   const traj = train.traj;
-  const steps = r.ckpts.map((c) => c.step);
+  // The run may have grown since this analysis (autodownload keeps landing
+  // checkpoints and rebuilding the run list) — render only the analyzed
+  // prefix so every array stays in step, and say when there's more to do.
+  const n = Math.min(r.ckpts.length, traj.files.length, traj.cosines.length, traj.spectro.length);
+  const ckpts = r.ckpts.slice(0, n);
+  const steps = ckpts.map((c) => c.step);
+  const grown = r.ckpts.length - n;
   $('train-charts').classList.remove('hidden');
-  $('train-status').textContent = `${steps.length} checkpoints · steps ${steps[0]}–${steps[steps.length - 1]} · ${traj.files[0].type}`;
+  $('train-status').textContent =
+    `${n} checkpoints · steps ${steps[0]}–${steps[n - 1]} · ${traj.files[0].type}` +
+    (grown > 0 ? ` · +${grown} new since this analysis — hit Analyze run to include them` : '');
 
-  const t = analyzeTrajectory(steps, traj);
+  const view = {
+    files: traj.files.slice(0, n),
+    cosines: traj.cosines.slice(0, n),
+    spectro: traj.spectro.slice(0, n),
+    mod_order: traj.mod_order,
+  };
+  const t = analyzeTrajectory(steps, view);
   const zone = t.zone;
   fillReadings(steps, t);
   $('train-insights').innerHTML = diagnose(steps, t)
@@ -735,10 +750,10 @@ function renderTraining(r) {
     note.innerHTML = `<b>No lock yet</b> — the concept was still changing at the last checkpoint. Undercooked: train longer, then re-analyze (only new checkpoints get processed).`;
   }
 
-  drawSeries($('c-norm'), steps, traj.files.map((f) => f.total_norm), { zone });
-  drawSeries($('c-peak'), steps, traj.files.map((f) => f.peak_smax), { zone, capY: 5, yMin: 0, color: getComputedStyle(document.documentElement).getPropertyValue('--bad').trim() });
-  drawSeries($('c-srank'), steps, traj.files.map((f) => f.median_srank), { zone, yMin: 0 });
-  drawSeries($('c-cos'), steps, traj.cosines, { zone, color: getComputedStyle(document.documentElement).getPropertyValue('--good').trim() });
+  drawSeries($('c-norm'), steps, view.files.map((f) => f.total_norm), { zone });
+  drawSeries($('c-peak'), steps, view.files.map((f) => f.peak_smax), { zone, capY: 5, yMin: 0, color: getComputedStyle(document.documentElement).getPropertyValue('--bad').trim() });
+  drawSeries($('c-srank'), steps, view.files.map((f) => f.median_srank), { zone, yMin: 0 });
+  drawSeries($('c-cos'), steps, view.cosines, { zone, color: getComputedStyle(document.documentElement).getPropertyValue('--good').trim() });
 
   // spectrogram
   const canvas = $('c-spectro');
@@ -747,16 +762,16 @@ function renderTraining(r) {
   canvas.width = w * dpr; canvas.height = h * dpr;
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
-  const order = traj.mod_order.map((m, idx) => ({ m, idx })).sort((a, b) => moduleSortKey(a.m) - moduleSortKey(b.m));
-  const cols = traj.spectro.length, rows = order.length;
+  const order = view.mod_order.map((m, idx) => ({ m, idx })).sort((a, b) => moduleSortKey(a.m) - moduleSortKey(b.m));
+  const cols = view.spectro.length, rows = order.length;
   const cw = w / cols, rh = h / rows;
   for (let c = 0; c < cols; c++) {
     for (let ri = 0; ri < rows; ri++) {
-      ctx.fillStyle = spectroColor(traj.spectro[c][order[ri].idx]);
+      ctx.fillStyle = spectroColor(view.spectro[c][order[ri].idx]);
       ctx.fillRect(c * cw, ri * rh, Math.ceil(cw) - (cw > 3 ? 1 : 0), Math.ceil(rh));
     }
   }
-  canvas._meta = { steps, order, cw, rh, traj, run: r };
+  canvas._meta = { steps, order, cw, rh, spectro: view.spectro, ckpts };
   $('spectro-legend').innerHTML = `rows: modules grouped by block (gates first) &middot; color: <span style="color:${spectroColor(1)}">σ low</span> → <span style="color:${spectroColor(5)}">σ 5</span> → <span style="color:${spectroColor(15)}">σ 15+</span>`;
 }
 
@@ -766,11 +781,11 @@ function spectroHover(ev) {
   const tip = $('tooltip');
   if (!meta) return;
   const rect = canvas.getBoundingClientRect();
-  const c = Math.min(Math.floor((ev.clientX - rect.left) / meta.cw), meta.steps.length - 1);
+  const c = Math.min(Math.floor((ev.clientX - rect.left) / meta.cw), meta.spectro.length - 1);
   const ri = Math.min(Math.floor((ev.clientY - rect.top) / meta.rh), meta.order.length - 1);
   if (c < 0 || ri < 0) { tip.classList.add('hidden'); return; }
   const mod = meta.order[ri].m;
-  const s = meta.traj.spectro[c][meta.order[ri].idx];
+  const s = meta.spectro[c][meta.order[ri].idx];
   tip.textContent = `step ${meta.steps[c]} · ${mod.replace('diffusion_model.', '')} · σ ${s.toFixed(2)}`;
   tip.classList.remove('hidden');
   tip.style.left = Math.min(ev.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
@@ -1118,6 +1133,16 @@ function bindResizer() {
 /* ---------------- init ---------------- */
 
 function init() {
+  // Surface unexpected errors with their location instead of failing silently.
+  window.addEventListener('error', (e) => {
+    console.error(e.error || e.message);
+    const at = e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '';
+    toast(`Error: ${e.message}${at}`, true);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    console.error(e.reason);
+  });
+
   // migrate: strip module arrays from cache entries written by older versions
   for (let i = localStorage.length - 1; i >= 0; i--) {
     const k = localStorage.key(i);
@@ -1165,9 +1190,9 @@ function init() {
     const meta = $('c-spectro')._meta;
     if (!meta) return;
     const rect = $('c-spectro').getBoundingClientRect();
-    const c = Math.min(Math.floor((ev.clientX - rect.left) / meta.cw), meta.steps.length - 1);
+    const c = Math.max(0, Math.min(Math.floor((ev.clientX - rect.left) / meta.cw), meta.ckpts.length - 1));
     setTab('inspect');
-    selectFile(meta.run.ckpts[c].file.path);
+    selectFile(meta.ckpts[c].file.path);
   });
   document.querySelectorAll('.tchart').forEach((cv) => {
     cv.addEventListener('mousemove', lineHover);
