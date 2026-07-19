@@ -106,7 +106,23 @@
       <div id="vastpanel" class="hidden">
         <div class="vast-grid">
           <div>
-            <div class="section-label">connection</div>
+            <div class="section-label">status</div>
+            <div class="vcard">
+              <div class="vstatus-line"><span class="vdot" id="v-dot"></span><span id="v-phase" class="vphase">stopped</span><span id="v-msg" class="dim"></span></div>
+              <div class="vstats">
+                <div class="stat"><div class="v" id="v-done">0 / 0</div><div class="k">checkpoints local</div></div>
+                <div class="stat"><div class="v" id="v-next">&mdash;</div><div class="k">next check</div></div>
+                <div class="stat"><div class="v" id="v-cycles">0</div><div class="k">cycles</div></div>
+              </div>
+              <div id="v-current" class="hidden">
+                <div class="vcur-head"><span id="v-cur-name"></span><span id="v-cur-bytes" class="dim"></span></div>
+                <div class="vbar"><div class="vbar-fill" id="v-bar"></div></div>
+                <div id="v-cur-speed" class="dim vcur-speed"></div>
+              </div>
+              <div id="v-last" class="hidden vlast"><span style="color:var(--good)">&#10004;</span> <span id="v-last-name"></span> <span id="v-last-sub" class="dim"></span></div>
+            </div>
+
+            <div class="section-label" style="margin-top:14px">connection</div>
             <div class="vcard">
               <label class="vlabel">vast SSH command <span class="vopt">(paste it straight from the vast dashboard)</span>
                 <input id="v-ssh" type="text" autocomplete="off" spellcheck="false" placeholder="ssh -p 12985 root@185.99.66.48 -L 8080:localhost:8080">
@@ -140,24 +156,8 @@
             </div>
           </div>
 
-          <div>
-            <div class="section-label">status</div>
-            <div class="vcard">
-              <div class="vstatus-line"><span class="vdot" id="v-dot"></span><span id="v-phase" class="vphase">stopped</span><span id="v-msg" class="dim"></span></div>
-              <div class="vstats">
-                <div class="stat"><div class="v" id="v-done">0 / 0</div><div class="k">checkpoints local</div></div>
-                <div class="stat"><div class="v" id="v-next">&mdash;</div><div class="k">next check</div></div>
-                <div class="stat"><div class="v" id="v-cycles">0</div><div class="k">cycles</div></div>
-              </div>
-              <div id="v-current" class="hidden">
-                <div class="vcur-head"><span id="v-cur-name"></span><span id="v-cur-bytes" class="dim"></span></div>
-                <div class="vbar"><div class="vbar-fill" id="v-bar"></div></div>
-                <div id="v-cur-speed" class="dim vcur-speed"></div>
-              </div>
-              <div id="v-last" class="hidden vlast"><span style="color:var(--good)">&#10004;</span> <span id="v-last-name"></span> <span id="v-last-sub" class="dim"></span></div>
-            </div>
-
-            <div class="section-label" style="margin-top:14px">activity</div>
+          <div class="vast-logcol">
+            <div class="section-label">activity</div>
             <div id="v-log"></div>
           </div>
         </div>
