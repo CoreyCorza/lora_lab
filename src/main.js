@@ -180,17 +180,28 @@ async function analyzeAll() {
   if (!pending.length) { toast('Everything in the list is already analyzed'); return; }
   const btn = $('btn-analyze-all');
   btn.disabled = true;
+
+  // Pool of parallel workers — each analysis is its own python process, so this
+  // is real multi-core parallelism. 3 keeps disk IO sane on big checkpoint files.
+  const CONCURRENCY = 3;
+  let next = 0;
   let done = 0;
-  for (const f of pending) {
-    $('list-status').textContent = `analyzing ${++done}/${pending.length}: ${f.name}`;
-    try {
-      const a = await tool(['analyze', f.path]);
-      setCached(f, a);
-      renderList();
-    } catch (e) {
-      toast(`${f.name}: ${e.message || e}`, true);
+  const worker = async () => {
+    while (next < pending.length) {
+      const f = pending[next++];
+      try {
+        const a = await tool(['analyze', f.path]);
+        setCached(f, a);
+        renderList();
+      } catch (e) {
+        toast(`${f.name}: ${e.message || e}`, true);
+      }
+      done++;
+      $('list-status').textContent = `analyzing ${done}/${pending.length} (${CONCURRENCY} at a time)`;
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pending.length) }, worker));
+
   $('list-status').textContent = `${state.files.length} files`;
   btn.disabled = false;
   toast(`Analyzed ${done} files`);
