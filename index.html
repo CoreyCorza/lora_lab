@@ -30,6 +30,9 @@
     <div id="tabbar">
       <button class="tab active" data-tab="inspect">Inspect</button>
       <button class="tab" data-tab="training">Training</button>
+      <button class="tab" data-tab="vast">Autodownload</button>
+      <span class="spacer"></span>
+      <span id="v-credit" class="credit hidden" data-tip="vast.ai account credit"></span>
     </div>
 
     <div id="main">
@@ -98,6 +101,66 @@
         </div>
 
         <div id="busy" class="hidden"><div class="busy-bar"></div><span id="busy-text"></span></div>
+      </div>
+
+      <div id="vastpanel" class="hidden">
+        <div class="vast-grid">
+          <div>
+            <div class="section-label">connection</div>
+            <div class="vcard">
+              <label class="vlabel">vast SSH command <span class="vopt">(paste it straight from the vast dashboard)</span>
+                <input id="v-ssh" type="text" autocomplete="off" spellcheck="false" placeholder="ssh -p 12985 root@185.99.66.48 -L 8080:localhost:8080">
+              </label>
+              <div class="vprev">connecting to: <span id="v-ssh-info">&mdash;</span></div>
+              <label class="vlabel">SSH private key
+                <span class="vrow"><input id="v-key" type="text" autocomplete="off" spellcheck="false"><button id="v-browse-key" class="btn small">Browse</button></span>
+              </label>
+              <label class="vlabel">vast API key <span class="vopt">(optional &mdash; shows account credit)</span>
+                <input id="v-api" type="password" autocomplete="off">
+              </label>
+            </div>
+
+            <div class="section-label" style="margin-top:14px">folders</div>
+            <div class="vcard">
+              <label class="vlabel">training job name <span class="vopt">(the folder under /workspace/ai-toolkit/output)</span>
+                <input id="v-job" type="text" autocomplete="off" spellcheck="false" placeholder="my_lora_run">
+              </label>
+              <div class="vprev">remote: <span id="v-path-prev">&mdash;</span></div>
+              <label class="vlabel">download to (this PC)
+                <span class="vrow"><input id="v-local" type="text" autocomplete="off" spellcheck="false"><button id="v-browse-local" class="btn small">Browse</button><button id="v-open-local" class="btn small" data-tip="Open in Explorer">Open</button></span>
+              </label>
+              <label class="vlabel">check every (seconds)
+                <input id="v-poll" type="text" autocomplete="off" style="width:64px">
+              </label>
+              <div class="vrow" style="margin-top:12px">
+                <button id="v-start" class="btn accent">&#9654; Start autodownload</button>
+                <button id="v-stop" class="btn" disabled>&#9632; Stop</button>
+              </div>
+              <div class="vhint">New checkpoints download automatically as the trainer saves them &mdash; over the instance's Cloudflare tunnel when available (the fast path that avoids vast's slow direct-IP rate), falling back to SSH. While running, closing this window keeps downloads going in the tray.</div>
+            </div>
+          </div>
+
+          <div>
+            <div class="section-label">status</div>
+            <div class="vcard">
+              <div class="vstatus-line"><span class="vdot" id="v-dot"></span><span id="v-phase" class="vphase">stopped</span><span id="v-msg" class="dim"></span></div>
+              <div class="vstats">
+                <div class="stat"><div class="v" id="v-done">0 / 0</div><div class="k">checkpoints local</div></div>
+                <div class="stat"><div class="v" id="v-next">&mdash;</div><div class="k">next check</div></div>
+                <div class="stat"><div class="v" id="v-cycles">0</div><div class="k">cycles</div></div>
+              </div>
+              <div id="v-current" class="hidden">
+                <div class="vcur-head"><span id="v-cur-name"></span><span id="v-cur-bytes" class="dim"></span></div>
+                <div class="vbar"><div class="vbar-fill" id="v-bar"></div></div>
+                <div id="v-cur-speed" class="dim vcur-speed"></div>
+              </div>
+              <div id="v-last" class="hidden vlast"><span style="color:var(--good)">&#10004;</span> <span id="v-last-name"></span> <span id="v-last-sub" class="dim"></span></div>
+            </div>
+
+            <div class="section-label" style="margin-top:14px">activity</div>
+            <div id="v-log"></div>
+          </div>
+        </div>
       </div>
 
       <div id="training" class="hidden">

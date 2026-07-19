@@ -418,6 +418,17 @@ def cmd_pick():
     return {"dir": d or None}
 
 
+def cmd_pickfile(title="Choose file"):
+    import tkinter as tk
+    from tkinter import filedialog
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+    f = filedialog.askopenfilename(title=title)
+    root.destroy()
+    return {"file": f or None}
+
+
 def main():
     cmd = sys.argv[1]
     if cmd == "scan":
@@ -430,6 +441,8 @@ def main():
         out = cmd_traj(sys.argv[2:])
     elif cmd == "pick":
         out = cmd_pick()
+    elif cmd == "pickfile":
+        out = cmd_pickfile(sys.argv[2] if len(sys.argv) > 2 else "Choose file")
     else:
         out = {"error": f"unknown command {cmd}"}
     sys.stdout.write(json.dumps(out))

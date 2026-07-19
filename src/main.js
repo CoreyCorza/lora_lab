@@ -1,5 +1,6 @@
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import './style.css';
 
 const appWindow = getCurrentWindow();
@@ -795,12 +796,249 @@ function lineHover(ev) {
 function setTab(tab) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
   const training = tab === 'training';
-  $('filelist').classList.toggle('hidden', training);
+  const vast = tab === 'vast';
+  $('filepanel').classList.toggle('hidden', vast);
+  $('resizer').classList.toggle('hidden', vast);
+  $('filelist').classList.toggle('hidden', training || vast);
   $('runlist').classList.toggle('hidden', !training);
-  $('dashboard').classList.toggle('hidden', training);
+  $('dashboard').classList.toggle('hidden', training || vast);
   $('training').classList.toggle('hidden', !training);
+  $('vastpanel').classList.toggle('hidden', !vast);
   $('btn-analyze-all').classList.toggle('hidden', training);
   if (training) { computeRuns(); renderRuns(); }
+}
+
+/* ---------------- autodownload (vast.ai) tab ---------------- */
+
+const OUTPUT_BASE = '/workspace/ai-toolkit/output';
+const V_FIELDS = ['v-ssh', 'v-key', 'v-job', 'v-local', 'v-poll', 'v-api'];
+
+function parseSshCommand(text) {
+  if (!text) return null;
+  const t = text.trim();
+  const userHost = t.match(/([A-Za-z0-9._-]+)@([A-Za-z0-9._-]+)/);
+  const portMatch = t.match(/-p\s*(\d{1,5})/i);
+  if (!userHost && !/\bssh\b/i.test(t)) return null;
+  const out = {};
+  if (userHost) { out.username = userHost[1]; out.host = userHost[2]; }
+  if (portMatch) out.port = parseInt(portMatch[1], 10);
+  return out.host || out.port ? out : null;
+}
+
+function vReadForm() {
+  const p = parseSshCommand($('v-ssh').value) || {};
+  return {
+    host: p.host || '',
+    port: p.port || 22,
+    username: p.username || 'root',
+    ssh_command: $('v-ssh').value.trim(),
+    key_path: $('v-key').value.trim(),
+    job_name: $('v-job').value.trim(),
+    output_base: OUTPUT_BASE,
+    remote_dir: '',
+    local_dir: $('v-local').value.trim(),
+    poll_secs: parseInt($('v-poll').value, 10) || 60,
+    extension: '.safetensors',
+    vast_api_key: $('v-api').value.trim(),
+  };
+}
+
+function vWriteForm(cfg) {
+  let sshCmd = cfg.ssh_command || '';
+  if (!sshCmd && cfg.host) sshCmd = `ssh -p ${cfg.port ?? 22} ${cfg.username || 'root'}@${cfg.host}`;
+  $('v-ssh').value = sshCmd;
+  $('v-key').value = cfg.key_path ?? '';
+  let job = cfg.job_name || '';
+  if (!job && cfg.remote_dir) {
+    const rd = cfg.remote_dir.replace(/\/+$/, '');
+    const idx = rd.lastIndexOf('/');
+    if (idx >= 0) job = rd.slice(idx + 1);
+  }
+  $('v-job').value = job;
+  $('v-local').value = cfg.local_dir ?? '';
+  $('v-poll').value = cfg.poll_secs ?? 60;
+  $('v-api').value = cfg.vast_api_key ?? '';
+  vUpdatePreviews();
+}
+
+function vUpdatePreviews() {
+  const p = parseSshCommand($('v-ssh').value);
+  const info = $('v-ssh-info');
+  if (p && p.host && p.port) info.textContent = `${p.username || 'root'}@${p.host} · port ${p.port}`;
+  else if (p && (p.host || p.port)) info.textContent = `${p.username || 'root'}@${p.host || '?'} · port ${p.port || '?'}`;
+  else info.textContent = '— paste your vast SSH command above —';
+  const job = $('v-job').value.trim().replace(/^\/+|\/+$/g, '');
+  $('v-path-prev').textContent = job ? `${OUTPUT_BASE}/${job}` : `${OUTPUT_BASE}/…`;
+}
+
+let vPersistTimer;
+async function vPersist() {
+  try { await invoke('sync_save_config', { config: vReadForm() }); } catch { /* non-fatal */ }
+}
+
+async function vStart() {
+  try {
+    await invoke('start_sync', { config: vReadForm() });
+    vAppendLog({ ts: vNow(), level: 'info', msg: '▶ Start requested.' });
+  } catch (e) {
+    vAppendLog({ ts: vNow(), level: 'error', msg: `Could not start: ${e}` });
+    toast(String(e), true);
+  }
+  vRefreshStatus();
+}
+
+async function vStop() {
+  try {
+    await invoke('stop_sync');
+    vAppendLog({ ts: vNow(), level: 'info', msg: '■ Stop requested.' });
+  } catch (e) { toast(String(e), true); }
+  vRefreshStatus();
+}
+
+function vNow() { return new Date().toISOString().replace('T', ' ').slice(0, 19); }
+
+const V_MAX_LOG = 800;
+let vLogPinned = true;
+function vAppendLog(line) {
+  const box = $('v-log');
+  const div = document.createElement('div');
+  div.className = `logline lvl-${line.level || 'info'}`;
+  div.innerHTML = `<span class="ts">${escapeHtml((line.ts || '').slice(11))}</span><span class="msg"></span>`;
+  div.querySelector('.msg').textContent = line.msg || '';
+  box.appendChild(div);
+  while (box.childNodes.length > V_MAX_LOG) box.removeChild(box.firstChild);
+  if (vLogPinned) box.scrollTop = box.scrollHeight;
+}
+
+let vLastSavedSeen = null;
+let vRescanTimer;
+
+function vRenderStatus(s) {
+  const running = !!s.running;
+  $('v-start').disabled = running;
+  $('v-stop').disabled = !running;
+  V_FIELDS.forEach((f) => { $(f).disabled = running; });
+
+  $('v-phase').textContent = s.phase || 'stopped';
+  $('v-phase').dataset.phase = s.phase || 'stopped';
+  $('v-dot').dataset.state = s.connected ? 'on' : running ? 'wait' : 'off';
+  $('v-msg').textContent = s.message || '';
+  $('v-done').textContent = `${s.files_done ?? 0} / ${s.files_total ?? 0}`;
+  $('v-cycles').textContent = s.cycles ?? 0;
+  $('v-next').textContent =
+    s.phase === 'sleeping' && s.next_poll_in > 0 ? `${s.next_poll_in}s`
+    : s.phase === 'error' && s.next_poll_in > 0 ? `retry ${s.next_poll_in}s` : '—';
+
+  const cur = $('v-current');
+  if (s.current_file && s.current_total > 0) {
+    cur.classList.remove('hidden');
+    $('v-cur-name').textContent = s.current_file;
+    const pct = Math.min(100, (s.current_done / s.current_total) * 100);
+    $('v-bar').style.width = `${pct}%`;
+    $('v-cur-bytes').textContent = `${fmtSize(s.current_done)} / ${fmtSize(s.current_total)} (${pct.toFixed(0)}%)`;
+    const eta = s.eta_secs > 0 ? ` · ETA ${vFmtEta(s.eta_secs)}` : '';
+    $('v-cur-speed').textContent = `${s.speed_bps > 0 ? fmtSize(s.speed_bps) + '/s' : '—'}${eta}`;
+  } else {
+    cur.classList.add('hidden');
+    $('v-bar').style.width = '0%';
+  }
+
+  const last = $('v-last');
+  if (s.last_saved_name) {
+    last.classList.remove('hidden');
+    $('v-last-name').textContent = s.last_saved_name;
+    const spd = s.last_saved_speed_bps > 0 ? ` · ${fmtSize(s.last_saved_speed_bps)}/s` : '';
+    $('v-last-sub').textContent = `${fmtSize(s.last_saved_bytes)}${spd} · ${s.last_saved_at || ''}`;
+    // A fresh checkpoint just landed: refresh the file/run lists if the
+    // download folder is inside the scanned folder, so Inspect/Training see it.
+    if (s.last_saved_name !== vLastSavedSeen) {
+      vLastSavedSeen = s.last_saved_name;
+      const local = vReadForm().local_dir.toLowerCase();
+      if (settings.folder && local.startsWith(settings.folder.toLowerCase())) {
+        clearTimeout(vRescanTimer);
+        vRescanTimer = setTimeout(() => refreshFiles().catch(() => {}), 1500);
+      }
+    }
+  } else {
+    last.classList.add('hidden');
+  }
+  if (vLogPinned) { const b = $('v-log'); b.scrollTop = b.scrollHeight; }
+}
+
+function vFmtEta(secs) {
+  secs = Math.round(secs);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m ${secs % 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
+
+async function vRefreshStatus() {
+  try { vRenderStatus(await invoke('sync_status')); } catch { /* ignore */ }
+}
+
+let vCreditTimer;
+async function vRefreshCredit() {
+  const key = $('v-api').value.trim();
+  const chip = $('v-credit');
+  if (!key) { chip.classList.add('hidden'); return; }
+  try {
+    const info = await invoke('get_vast_credit', { apiKey: key });
+    chip.textContent = `vast $${Number(info.credit).toFixed(2)}`;
+    chip.dataset.state = info.credit < 5 ? 'low' : 'ok';
+    chip.classList.remove('hidden');
+  } catch (e) {
+    chip.textContent = 'vast: error';
+    chip.dataset.state = 'err';
+    chip.setAttribute('data-tip', `Could not fetch credit: ${e}`);
+    chip.classList.remove('hidden');
+  }
+}
+
+async function initVast() {
+  try { vWriteForm(await invoke('sync_get_config')); }
+  catch (e) { vAppendLog({ ts: vNow(), level: 'error', msg: `Failed to load settings: ${e}` }); }
+
+  const box = $('v-log');
+  box.addEventListener('scroll', () => {
+    vLogPinned = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  });
+
+  $('v-ssh').addEventListener('input', vUpdatePreviews);
+  $('v-job').addEventListener('input', vUpdatePreviews);
+  $('v-start').addEventListener('click', vStart);
+  $('v-stop').addEventListener('click', vStop);
+  $('v-browse-key').addEventListener('click', async () => {
+    try {
+      const r = await tool(['pickfile', 'Choose SSH private key']);
+      if (r.file) { $('v-key').value = r.file.replace(/\//g, '\\'); vPersist(); }
+    } catch (e) { toast(String(e.message || e), true); }
+  });
+  $('v-browse-local').addEventListener('click', async () => {
+    try {
+      const r = await tool(['pick']);
+      if (r.dir) { $('v-local').value = r.dir.replace(/\//g, '\\'); vPersist(); }
+    } catch (e) { toast(String(e.message || e), true); }
+  });
+  $('v-open-local').addEventListener('click', async () => {
+    const p = $('v-local').value.trim();
+    if (p) await invoke('open_folder', { path: p }).catch(() => {});
+  });
+
+  V_FIELDS.forEach((f) => $(f).addEventListener('input', () => {
+    clearTimeout(vPersistTimer);
+    vPersistTimer = setTimeout(vPersist, 500);
+  }));
+  $('v-api').addEventListener('input', () => {
+    clearTimeout(vCreditTimer);
+    vCreditTimer = setTimeout(vRefreshCredit, 800);
+  });
+  vRefreshCredit();
+  setInterval(vRefreshCredit, 5 * 60 * 1000);
+
+  await listen('log', (e) => vAppendLog(e.payload));
+  await listen('status', (e) => vRenderStatus(e.payload));
+  await vRefreshStatus();
 }
 
 /* ---------------- sidebar resize ---------------- */
@@ -922,6 +1160,7 @@ function init() {
 
   bindTooltips();
   bindResizer();
+  initVast();
 
   if (settings.folder) scan();
 }
