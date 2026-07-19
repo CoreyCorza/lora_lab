@@ -6,6 +6,7 @@ All subcommands print a single JSON object to stdout.
   clip <file> <cap>     write *_sclip<cap> copy with singular values capped
   pick                  native folder picker (tkinter), returns {"dir": ...}
 """
+import hashlib
 import json
 import os
 import struct
@@ -13,6 +14,18 @@ import sys
 from collections import defaultdict
 
 import numpy as np
+
+
+def _cache_dir():
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
+    d = os.path.join(base, "LoRALab", "cache")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _cache_path(path, st):
+    key = hashlib.sha1(f"{os.path.abspath(path)}|{int(st.st_mtime)}|{st.st_size}".encode()).hexdigest()
+    return os.path.join(_cache_dir(), key + ".json")
 
 HEALTHY_SMAX = 5.5
 SPIKED_SMAX = 8.0
@@ -134,6 +147,15 @@ def _sigma_max(W, iters=30, block=4, seed=0):
 
 
 def cmd_analyze(path):
+    st = os.stat(path)
+    cpath = _cache_path(path, st)
+    if os.path.exists(cpath):
+        try:
+            with open(cpath, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            pass
+
     header, base = read_header(path)
     lora, lokr = collect_modules(header)
     ftype = "lokr" if lokr else ("lora" if lora else "other")
@@ -176,8 +198,7 @@ def cmd_analyze(path):
     else:
         verdict = "borderline"
 
-    st = os.stat(path)
-    return {
+    result = {
         "path": path,
         "name": os.path.basename(path),
         "size": st.st_size,
@@ -195,6 +216,12 @@ def cmd_analyze(path):
         "over_cap_8": int((smaxes > 8.0).sum()),
         "modules": modules,
     }
+    try:
+        with open(cpath, "w", encoding="utf-8") as f:
+            json.dump(result, f)
+    except OSError:
+        pass
+    return result
 
 
 def to_bf16_bytes(arr):

@@ -17,7 +17,8 @@ const DEFAULT_PYTHON = 'C:\\Users\\CRZ\\Documents\\lora-inspect\\venv\\Scripts\\
 const state = {
   files: [],
   selected: null,     // file entry
-  analysis: null,     // analysis of selected
+  analysis: null,     // full analysis of selected
+  fullCache: new Map(), // path -> full analysis (session only; python has a disk cache too)
   filter: '',
   busyCount: 0,
 };
@@ -38,8 +39,11 @@ const getCached = (f) => {
   catch { return null; }
 };
 const setCached = (f, analysis) => {
-  try { localStorage.setItem(cacheKey(f), JSON.stringify(analysis)); }
-  catch { pruneCache(); try { localStorage.setItem(cacheKey(f), JSON.stringify(analysis)); } catch {} }
+  // Badges only need a summary — the full module list lives in state.fullCache
+  // (and in python's disk cache), so localStorage stays far below quota.
+  const { modules, ...summary } = analysis;
+  try { localStorage.setItem(cacheKey(f), JSON.stringify(summary)); }
+  catch { pruneCache(); try { localStorage.setItem(cacheKey(f), JSON.stringify(summary)); } catch {} }
 };
 function pruneCache() {
   const keys = [];
@@ -151,12 +155,13 @@ async function selectFile(path) {
   if (!f) return;
   state.selected = f;
   renderList();
-  const cached = getCached(f);
-  if (cached) {
-    state.analysis = cached;
+  const full = state.fullCache.get(f.path);
+  if (full && full.mtime === f.mtime) {
+    state.analysis = full;
     renderReport();
     return;
   }
+  // No full report in memory — ask the backend (its disk cache makes repeats fast)
   await analyzeSelected();
 }
 
@@ -165,6 +170,7 @@ async function analyzeSelected() {
   if (!f) return;
   try {
     const a = await tool(['analyze', f.path], `analyzing ${f.name} ...`);
+    state.fullCache.set(f.path, a);
     setCached(f, a);
     state.analysis = a;
     renderList();
@@ -191,6 +197,7 @@ async function analyzeAll() {
       const f = pending[next++];
       try {
         const a = await tool(['analyze', f.path]);
+        state.fullCache.set(f.path, a);
         setCached(f, a);
         renderList();
       } catch (e) {
@@ -437,6 +444,16 @@ function bindResizer() {
 /* ---------------- init ---------------- */
 
 function init() {
+  // migrate: strip module arrays from cache entries written by older versions
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (!k || !k.startsWith('ll_a:')) continue;
+    try {
+      const v = JSON.parse(localStorage.getItem(k));
+      if (v && v.modules) { delete v.modules; localStorage.setItem(k, JSON.stringify(v)); }
+    } catch { localStorage.removeItem(k); }
+  }
+
   $('folder-input').value = settings.folder;
   $('python-input').value = settings.python;
   $('cap-input').value = settings.cap;
