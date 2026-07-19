@@ -40,7 +40,7 @@ This app lets you **see it** and **fix it**.
 ### Python setup (pick whichever fits you)
 
 **Already run ComfyUI portable?** You have everything — just point the gear
-menu (⚙) at ComfyUI's bundled interpreter, e.g.:
+menu (⚙) in the app at ComfyUI's bundled interpreter, e.g.:
 
 ```
 C:\path\to\ComfyUI\python_embeded\python.exe
