@@ -183,6 +183,7 @@ async function analyzeSelected() {
 }
 
 async function analyzeAll() {
+  try { await refreshFiles(); } catch { /* keep stale list */ }
   const q = state.filter.toLowerCase();
   const pending = state.files.filter((f) => (!q || f.rel.toLowerCase().includes(q)) && !getCached(f));
   if (!pending.length) { toast('Everything in the list is already analyzed'); return; }
@@ -454,12 +455,30 @@ function selectRun(key) {
   }
 }
 
+async function refreshFiles() {
+  const dir = settings.folder;
+  if (!dir) return;
+  const data = await tool(['scan', dir]);
+  state.files = data.files;
+  renderList();
+  computeRuns();
+  renderRuns();
+  $('list-status').textContent = `${state.files.length} files`;
+}
+
 async function analyzeRun() {
-  const r = train.runs.find((x) => x.key === train.selected);
+  let r = train.runs.find((x) => x.key === train.selected);
   if (!r) return;
   const btn = $('btn-analyze-run');
   btn.disabled = true;
   try {
+    // pick up checkpoints saved since the last scan — Analyze means "what's there now"
+    $('train-status').textContent = 'rescanning folder...';
+    try {
+      await refreshFiles();
+      r = train.runs.find((x) => x.key === train.selected) || r;
+      btn.textContent = `Analyze run (${r.ckpts.length} checkpoints)`;
+    } catch { /* scan failure surfaces below via traj */ }
     // warm the per-file analysis cache in parallel first, then one traj call
     // (traj hits the disk cache for analyses and only loads factors for cosines)
     const pending = r.ckpts.map((c) => c.file).filter((f) => !getCached(f));
