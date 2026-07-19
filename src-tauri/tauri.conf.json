@@ -1,6 +1,6 @@
 {
   "productName": "LoRA Lab",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "identifier": "com.crz.loralab",
   "build": {
     "beforeDevCommand": "bun run dev",

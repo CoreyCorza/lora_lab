@@ -552,7 +552,7 @@ function analyzeTrajectory(steps, traj) {
   const growthAfterLock = lock >= 0 ? norms[n - 1] / norms[lock] - 1 : null;
   const lastStrength = lock >= 0 && norms[n - 1] > 0 ? norms[lock] / norms[n - 1] : null;
   return { lock, zone, endReason, flattened, growthAfterLock, lastStrength,
-           norms, sranks, peaks, maxSrank, rankFallAt, spikeAt };
+           norms, sranks, peaks, cosines, maxSrank, rankFallAt, spikeAt };
 }
 
 function diagnose(steps, t) {
