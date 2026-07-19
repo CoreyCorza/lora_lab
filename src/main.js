@@ -534,6 +534,45 @@ function analyzeTrajectory(steps, traj) {
            norms, sranks, peaks, maxSrank, rankFallAt, spikeAt };
 }
 
+function diagnose(steps, t) {
+  const out = [];
+  const last = steps.length - 1;
+  const locked = t.lock >= 0;
+  const rankFalling = t.rankFallAt >= 0;
+  const maxPeak = Math.max(...t.peaks);
+
+  // cos wobble after lock: direction destabilizing late
+  let wobbleAt = -1;
+  if (locked) {
+    for (let i = t.lock + 1; i < steps.length; i++) {
+      if (t.cosines[i] != null && t.cosines[i] < 0.98) { wobbleAt = i; break; }
+    }
+  }
+
+  if (!locked && rankFalling) {
+    out.push(['warn', `<b>Direction still searching while rank collapses</b> (since step ${steps[t.rankFallAt]}) — the classic signature of a dataset too small or too repetitive for this capacity. More/varied images, or lower rank/factor, will help more than training longer. Watch whether rank stabilizes as direction stability approaches 1.`]);
+  }
+  if (!locked && !rankFalling) {
+    out.push(['info', `<b>Still absorbing</b> — direction moving, rank holding, no spike. This run simply isn't done; keep training and re-analyze (only new checkpoints get processed).`]);
+  }
+  if (locked && t.growthAfterLock > 0.25) {
+    out.push(['warn', `<b>Amplifying after lock</b> — content froze at ~step ${steps[t.lock]} but magnitude grew +${Math.round(t.growthAfterLock * 100)}% since. Later checkpoints are the same concept, louder — that's where "weird" creeps in. Use the window, or run late checkpoints at reduced strength.`]);
+  }
+  if (locked && t.flattened && !rankFalling && maxPeak <= 5.5) {
+    out.push(['good', `<b>Textbook clean run</b> — locked, saturated, no collapse, no spike. Pick from the window and stop training; further steps are GPU heat.`]);
+  }
+  if (t.spikeAt >= 0 && (!locked || t.spikeAt < t.lock)) {
+    out.push(['bad', `<b>Spike forming before the concept settled</b> (σ crossed 5 at step ${steps[t.spikeAt]}) — the update is funneling into one direction instead of learning broadly. Lower the lr, or switch to full-rank LoKr; checkpoints from here will need clipping to stack.`]);
+  }
+  if (locked && rankFalling && t.rankFallAt > t.lock) {
+    out.push(['warn', `<b>Converged, then memorizing</b> — rank started collapsing at step ${steps[t.rankFallAt]}, after lock. Everything past that is trading generality for dataset recall; stay before it.`]);
+  }
+  if (wobbleAt >= 0) {
+    out.push(['warn', `<b>Direction destabilized late</b> (cos dipped at step ${steps[wobbleAt]} after locking) — often lr too high for the late phase. Prefer checkpoints before the wobble.`]);
+  }
+  return out;
+}
+
 function setRead(id, cls, text) {
   const el = $(id);
   el.className = 'chart-read ' + cls;
@@ -658,6 +697,9 @@ function renderTraining(r) {
   const t = analyzeTrajectory(steps, traj);
   const zone = t.zone;
   fillReadings(steps, t);
+  $('train-insights').innerHTML = diagnose(steps, t)
+    .map(([sev, html]) => `<div class="insight ${sev}"><span class="dot"></span><span>${html}</span></div>`)
+    .join('');
 
   const note = $('train-zone-note');
   if (zone) {

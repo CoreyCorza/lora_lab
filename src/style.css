@@ -180,6 +180,22 @@ input[type="text"]:focus { border-color: var(--accent); }
 .chart-read.good { color: var(--good); }
 .chart-read.warn { color: var(--warn); }
 .chart-read.bad { color: var(--bad); }
+
+#train-insights { display: grid; gap: 6px; margin-bottom: 10px; }
+.insight {
+  display: grid; grid-template-columns: 8px 1fr; gap: 10px; align-items: start;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 8px 12px;
+  font-size: 11.5px; line-height: 1.5;
+}
+.insight .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 4px; }
+.insight.good .dot { background: var(--good); }
+.insight.warn .dot { background: var(--warn); }
+.insight.bad .dot { background: var(--bad); }
+.insight.info .dot { background: var(--accent); }
+.insight b { color: var(--text); }
 .tchart { display: block; width: 100%; height: 110px; }
 #c-spectro { display: block; width: 100%; height: 220px; cursor: pointer; }
 #spectro-legend { font-size: 10px; margin-top: 4px; font-family: var(--mono); }
